@@ -556,7 +556,7 @@ rm -f /etc/localtime && ln -s /usr/share/zoneinfo/America/Bogota /etc/localtime
 
 dialog --title "AVISO" \
        --backtitle "$BACKTITLE" \
-       --msgbox "RECUERDE QUE ACCEDE POR SSH CON PUERTO 57690 | USER ISSABEL technicalsupport" 8 50
+       --msgbox "RECUERDE QUE ACCEDE POR SSH CON PUERTO 58690 | USER ISSABEL technicalsupport" 8 50
 
 }
 
