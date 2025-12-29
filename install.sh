@@ -560,6 +560,96 @@ dialog --title "AVISO" \
 
 }
 
+function configure_letsencrypt_ssl()
+{
+  # Solicitar dominio al usuario
+  DOMAIN=$(\
+    dialog --backtitle "$BACKTITLE" --title "Configuración SSL Let's Encrypt" --no-tags \
+    --inputbox "Ingresa el dominio FQDN para el certificado SSL:\n(Ejemplo: ippbxcc.integrityhuman.com)" 10 60 \
+    3>&1 1>&2 2>&3 3>&- \
+  )
+  
+  if [ -z "$DOMAIN" ]; then
+    dialog --backtitle "$BACKTITLE" --title "SSL Cancelado" \
+      --msgbox "No se configuró SSL. Puedes hacerlo manualmente después con:\ncertbot --apache -d tudominio.com" 8 60
+    return 1
+  fi
+  
+  # Verificar que el dominio resuelva correctamente
+  dialog --backtitle "$BACKTITLE" --title "Verificando DNS" \
+    --infobox "Verificando que $DOMAIN resuelva correctamente..." 6 60
+  sleep 2
+  
+  RESOLVED_IP=$(nslookup $DOMAIN 8.8.8.8 | grep -A1 "Name:" | tail -1 | awk '{print $2}')
+  SERVER_IP=$(curl -s ifconfig.me)
+  
+  if [ "$RESOLVED_IP" != "$SERVER_IP" ]; then
+    dialog --backtitle "$BACKTITLE" --title "Error DNS" \
+      --msgbox "ADVERTENCIA: El dominio $DOMAIN resuelve a $RESOLVED_IP\npero la IP del servidor es $SERVER_IP\n\nAsegúrate de que el DNS esté configurado correctamente." 10 70
+    
+    dialog --backtitle "$BACKTITLE" --title "Continuar?" \
+      --yesno "¿Deseas continuar de todos modos?" 7 50
+    if [ $? -ne 0 ]; then
+      return 1
+    fi
+  fi
+  
+  # Deshabilitar SELinux temporalmente
+  setenforce 0 &>/dev/null
+  
+  # Intentar obtener certificado
+  (
+  echo "10" ; sleep 1
+  echo "XXX" ; echo "Deteniendo Apache..." ; echo "XXX"
+  systemctl stop httpd
+  
+  echo "30" ; sleep 1
+  echo "XXX" ; echo "Solicitando certificado SSL a Let's Encrypt..." ; echo "XXX"
+  
+  # Intentar con certbot standalone
+  certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d $DOMAIN &>>/tmp/letsencrypt_install.log
+  CERTBOT_RESULT=$?
+  
+  echo "70" ; sleep 1
+  
+  if [ $CERTBOT_RESULT -eq 0 ]; then
+    echo "XXX" ; echo "Certificado obtenido exitosamente. Configurando Apache..." ; echo "XXX"
+    
+    # Instalar certificado en Apache
+    certbot install --apache --cert-name $DOMAIN --non-interactive &>>/tmp/letsencrypt_install.log
+    
+    echo "90" ; sleep 1
+    echo "XXX" ; echo "Reiniciando Apache..." ; echo "XXX"
+    systemctl start httpd
+    
+    echo "100" ; sleep 1
+    echo "XXX" ; echo "¡Configuración SSL completada!" ; echo "XXX"
+  else
+    echo "XXX" ; echo "Error al obtener certificado. Reiniciando Apache..." ; echo "XXX"
+    systemctl start httpd
+    echo "100"
+  fi
+  ) | dialog --backtitle "$BACKTITLE" --title "Instalando Certificado SSL" --gauge "Iniciando..." 10 70 0
+  
+  # Verificar resultado
+  if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    dialog --backtitle "$BACKTITLE" --title "SSL Configurado Exitosamente" \
+      --msgbox "¡Certificado SSL instalado correctamente!\n\nDominio: $DOMAIN\nCertificado válido por 90 días\n\nLa renovación automática está configurada.\n\nAccede a: https://$DOMAIN" 12 70
+    
+    # Configurar renovación automática
+    echo "0 3 * * * certbot renew --quiet --apache" >> /var/spool/cron/root
+    
+    return 0
+  else
+    # Mostrar errores
+    ERROR_MSG=$(tail -20 /tmp/letsencrypt_install.log | grep -i "error\|failed\|detail" | head -5)
+    
+    dialog --backtitle "$BACKTITLE" --title "Error al Configurar SSL" \
+      --msgbox "No se pudo obtener el certificado SSL.\n\nPosibles causas:\n1. El dominio no resuelve correctamente\n2. Rate limit de Let's Encrypt (5 intentos/hora)\n3. Puerto 80 bloqueado externamente\n\nRevisa el log: /tmp/letsencrypt_install.log\n\nÚltimos errores:\n$ERROR_MSG\n\nPuedes intentar manualmente después con:\ncertbot --apache -d $DOMAIN" 18 75
+    
+    return 1
+  fi
+}
 
 check_dialog
 add_repos
@@ -581,6 +671,18 @@ install_packages
 post_install
 set_passwords
 kiwanoplus
+
+# ===== CONFIGURACIÓN SSL =====
+dialog --title "Configurar SSL Let's Encrypt" \
+  --backtitle "$BACKTITLE" \
+  --yesno "¿Deseas configurar un certificado SSL de Let's Encrypt?\n\nRequiere que el dominio apunte correctamente a este servidor." 9 70
+
+if [ $? -eq 0 ]; then
+  configure_letsencrypt_ssl
+fi
+# ============================
+
+
 cleanup
 bye
 reboot
